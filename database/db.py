@@ -153,3 +153,59 @@ def listar_incidentes(limite: int = 10) -> pd.DataFrame:
         )
     finally:
         con.close()
+
+def actualizar_incidente(id_incidente: int, distrito: str, delito: str, descripcion: str) -> bool:
+    inicializar()
+    con = conectar()
+    try:
+        with con:
+            cur = con.execute(
+                "UPDATE incidentes_ciudadanos SET distrito = ?, delito = ?, descripcion = ? "
+                "WHERE id = ?",
+                (distrito, delito, descripcion.strip(), id_incidente),
+            )
+            return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def eliminar_incidente(id_incidente: int) -> bool:
+    inicializar()
+    con = conectar()
+    try:
+        with con:
+            cur = con.execute("DELETE FROM incidentes_ciudadanos WHERE id = ?", (id_incidente,))
+            return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def ultima_sincronizacion():
+    """Devuelve la última sincronización como diccionario, o None si no hay."""
+    inicializar()
+    con = conectar()
+    try:
+        fila = con.execute(
+            "SELECT f.nombre, s.archivo, s.fecha_descarga, s.filas_cargadas "
+            "FROM sincronizaciones s JOIN fuentes f ON f.id = s.fuente_id "
+            "ORDER BY s.id DESC LIMIT 1"
+        ).fetchone()
+        if fila is None:
+            return None
+        return {"fuente": fila[0], "archivo": fila[1], "fecha": fila[2], "filas": fila[3]}
+    finally:
+        con.close()
+
+
+def historial_sincronizaciones(limite: int = 10) -> pd.DataFrame:
+    inicializar()
+    con = conectar()
+    try:
+        return pd.read_sql_query(
+            "SELECT s.id, f.nombre AS fuente, s.fecha_descarga, s.archivo, s.filas_cargadas "
+            "FROM sincronizaciones s JOIN fuentes f ON f.id = s.fuente_id "
+            "ORDER BY s.id DESC LIMIT ?",
+            con, params=(limite,),
+        )
+    finally:
+        con.close()       
