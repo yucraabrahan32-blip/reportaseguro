@@ -36,6 +36,16 @@ CREATE TABLE IF NOT EXISTS denuncias_oficiales (
     correccion_manual INTEGER NOT NULL DEFAULT 0,
     UNIQUE (fuente_id, distrito, delito, periodo)
 );
+
+CREATE TABLE IF NOT EXISTS incidentes_ciudadanos (
+    id          INTEGER PRIMARY KEY,
+    distrito    TEXT NOT NULL,
+    delito      TEXT NOT NULL,
+    fecha_hecho TEXT NOT NULL,
+    hora_hecho  TEXT NOT NULL,
+    descripcion TEXT NOT NULL,
+    creado_en   TEXT NOT NULL
+);
 """
 
 
@@ -98,5 +108,48 @@ def guardar_denuncias_oficiales(df: pd.DataFrame, fuente: str, url: str, archivo
                 ],
             )
         return len(largo)
+    finally:
+        con.close()
+
+
+def listar_distritos() -> list[str]:
+    """Distritos disponibles, tomados de los datos oficiales para que ambas fuentes coincidan."""
+    inicializar()
+    con = conectar()
+    try:
+        filas = con.execute(
+            "SELECT DISTINCT distrito FROM denuncias_oficiales ORDER BY distrito"
+        ).fetchall()
+        return [f[0] for f in filas]
+    finally:
+        con.close()
+
+
+def guardar_incidente(distrito: str, delito: str, fecha_hecho: str,
+                      hora_hecho: str, descripcion: str) -> int:
+    inicializar()
+    con = conectar()
+    try:
+        with con:
+            return con.execute(
+                "INSERT INTO incidentes_ciudadanos "
+                "(distrito, delito, fecha_hecho, hora_hecho, descripcion, creado_en) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (distrito, delito, fecha_hecho, hora_hecho, descripcion.strip(),
+                 datetime.now().isoformat(timespec="seconds")),
+            ).lastrowid
+    finally:
+        con.close()
+
+
+def listar_incidentes(limite: int = 10) -> pd.DataFrame:
+    inicializar()
+    con = conectar()
+    try:
+        return pd.read_sql_query(
+            "SELECT id, distrito, delito, fecha_hecho, hora_hecho, descripcion "
+            "FROM incidentes_ciudadanos ORDER BY id DESC LIMIT ?",
+            con, params=(limite,),
+        )
     finally:
         con.close()
