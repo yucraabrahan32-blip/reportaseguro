@@ -11,15 +11,25 @@ st.caption("No escribas nombres, DNI ni teléfonos. Describe el hecho, no a las 
 if "aviso" in st.session_state:
     st.success(st.session_state.pop("aviso"))
 
-distritos = db.listar_distritos()
-if not distritos:
-    st.warning("Aún no hay datos oficiales cargados. Ve a la página 'Sincronizar Datos'.")
+departamentos = db.listar_departamentos()
+if not departamentos:
+    st.warning("Falta cargar el catálogo de ubigeo. Ejecuta: python -m backend.ubigeo")
     st.stop()
 
 DELITOS = ["ROBO", "HURTO", "HOMICIDIO", "OTRO"]
 
+st.markdown("**Ubicación**")
+col1, col2, col3 = st.columns(3)
+departamento = col1.selectbox(
+    "Departamento", departamentos, format_func=str.title,
+    index=departamentos.index("LIMA") if "LIMA" in departamentos else 0,
+)
+provincias = db.listar_provincias(departamento)
+provincia = col2.selectbox("Provincia", provincias, format_func=str.title)
+distritos = db.listar_distritos_de(departamento, provincia)
+distrito = col3.selectbox("Distrito", distritos, format_func=str.title)
+
 with st.form("form_incidente", clear_on_submit=True):
-    distrito = st.selectbox("Distrito", distritos)
     delito = st.selectbox("Tipo de incidente", DELITOS, format_func=str.capitalize)
     fecha = st.date_input("Fecha del hecho", value=date.today(), max_value=date.today())
     hora = st.time_input("Hora aproximada")
@@ -27,11 +37,14 @@ with st.form("form_incidente", clear_on_submit=True):
     enviado = st.form_submit_button("Enviar reporte")
 
 if enviado:
-    if len(descripcion.strip()) < 10:
+    if not distrito:
+        st.error("Selecciona un distrito.")
+    elif len(descripcion.strip()) < 10:
         st.error("La descripción debe tener al menos 10 caracteres.")
     else:
         nuevo_id = db.guardar_incidente(
-            distrito, delito, fecha.isoformat(), hora.strftime("%H:%M"), descripcion
+            departamento, provincia, distrito, delito,
+            fecha.isoformat(), hora.strftime("%H:%M"), descripcion,
         )
         st.session_state["aviso"] = f"Reporte #{nuevo_id} registrado. Gracias por contribuir."
         st.rerun()
@@ -53,12 +66,8 @@ seleccion = st.selectbox(
 )
 fila = incidentes[incidentes["id"] == seleccion].iloc[0]
 
-st.markdown("**Editar**")
+st.markdown("**Editar** (la ubicación no se modifica; si te equivocaste de lugar, elimina y reporta de nuevo)")
 with st.form(f"form_editar_{seleccion}"):
-    ed_distrito = st.selectbox(
-        "Distrito", distritos,
-        index=distritos.index(fila["distrito"]) if fila["distrito"] in distritos else 0,
-    )
     ed_delito = st.selectbox(
         "Tipo de incidente", DELITOS,
         index=DELITOS.index(fila["delito"]) if fila["delito"] in DELITOS else 0,
@@ -70,7 +79,7 @@ with st.form(f"form_editar_{seleccion}"):
 if guardar:
     if len(ed_descripcion.strip()) < 10:
         st.error("La descripción debe tener al menos 10 caracteres.")
-    elif db.actualizar_incidente(int(seleccion), ed_distrito, ed_delito, ed_descripcion):
+    elif db.actualizar_incidente(int(seleccion), ed_delito, ed_descripcion):
         st.session_state["aviso"] = f"Reporte #{seleccion} actualizado."
         st.rerun()
     else:
