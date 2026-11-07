@@ -306,3 +306,65 @@ def incidentes_con_coordenadas() -> pd.DataFrame:
         return pd.DataFrame()
     finally:
         con.close()
+
+def _asegurar_tabla_regional(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS denuncias_regionales (
+            id                INTEGER PRIMARY KEY,
+            fuente_id         INTEGER NOT NULL REFERENCES fuentes(id),
+            sincronizacion_id INTEGER NOT NULL REFERENCES sincronizaciones(id),
+            region            TEXT NOT NULL,
+            categoria         TEXT NOT NULL,
+            periodo           TEXT NOT NULL,
+            cantidad          INTEGER NOT NULL CHECK (cantidad >= 0),
+            UNIQUE (fuente_id, region, categoria, periodo)
+        )
+        """
+    )
+
+
+def guardar_denuncias_regionales(df: pd.DataFrame, fuente: str, url: str, archivo: str) -> int:
+    """Guarda las denuncias por región. Si la fila ya existe, la actualiza."""
+    inicializar()
+    con = conectar()
+    try:
+        with con:
+            _asegurar_tabla_regional(con)
+            fuente_id = con.execute(
+                "SELECT id FROM fuentes WHERE nombre = ?", (fuente,)
+            ).fetchone()[0]
+            sync_id = con.execute(
+                "INSERT INTO sincronizaciones (fuente_id, url, archivo, fecha_descarga, filas_cargadas) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (fuente_id, url, archivo, datetime.now().isoformat(timespec="seconds"), len(df)),
+            ).lastrowid
+            con.executemany(
+                """
+                INSERT INTO denuncias_regionales
+                    (fuente_id, sincronizacion_id, region, categoria, periodo, cantidad)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (fuente_id, region, categoria, periodo) DO UPDATE SET
+                    cantidad = excluded.cantidad,
+                    sincronizacion_id = excluded.sincronizacion_id
+                """,
+                [
+                    (fuente_id, sync_id, r.region, r.categoria, r.periodo, int(r.cantidad))
+                    for r in df.itertuples()
+                ],
+            )
+        return len(df)
+    finally:
+        con.close()
+
+
+def denuncias_regionales_df() -> pd.DataFrame:
+    inicializar()
+    con = conectar()
+    try:
+        _asegurar_tabla_regional(con)
+        return pd.read_sql_query(
+            "SELECT region, categoria, periodo, cantidad FROM denuncias_regionales", con
+        )
+    finally:
+        con.close()

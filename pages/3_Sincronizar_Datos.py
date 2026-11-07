@@ -1,27 +1,33 @@
 import streamlit as st
 
-from backend import services
+from backend import servicio_regional, services
 from database import db
 
 st.set_page_config(page_title="Sincronizar datos", page_icon="🔄", layout="wide")
 st.title("🔄 Sincronizar datos oficiales")
 st.write(
     "Descarga el reporte del Ministerio del Interior (SIDPOL), extrae las denuncias "
-    "por distrito y las guarda en la base de datos con su fuente y fecha."
+    "por distrito (Lima y Callao) y por región (todo el país) y las guarda en la base "
+    "de datos con su fuente y fecha."
 )
 
 if st.button("Sincronizar ahora", type="primary"):
     with st.spinner("Descargando y procesando el reporte..."):
         try:
-            resultado = services.sincronizar_sidpol()
+            distrital = services.sincronizar_sidpol()
+            regional = servicio_regional.sincronizar_regional()
         except Exception as error:
             st.error(f"No se pudo sincronizar: {error}")
         else:
-            st.success(f"Sincronización completa: {resultado['filas_guardadas']} registros guardados.")
-            st.caption(
-                f"Líneas del PDF descartadas por no poder leerse: {resultado['lineas_dudosas']}. "
-                "Algunas son notas al pie; otras requieren revisión manual."
+            st.success(
+                f"Sincronización completa: {distrital['filas_guardadas']} registros distritales "
+                f"y {regional['filas_guardadas']} regionales ({regional['regiones']} regiones)."
             )
+            if regional["rechazadas"]:
+                st.warning(
+                    "Regiones descartadas por no pasar las validaciones: "
+                    + ", ".join(r for r, _ in regional["rechazadas"])
+                )
 
 ultima = db.ultima_sincronizacion()
 if ultima:
