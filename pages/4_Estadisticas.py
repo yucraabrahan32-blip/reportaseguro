@@ -36,7 +36,7 @@ zona = ciudadanos[ciudadanos["provincia"].map(normalizar).isin({"LIMA", "CALLAO"
 zona["clave"] = zona["distrito"].map(clave)
 conteo = zona.groupby("clave").size().rename("reportes_ciudadanos")
 riesgo["clave"] = riesgo["distrito"].map(clave)
-riesgo = riesgo.merge(conteo, on="clave", how="left").fillna({"reportes_ciudadanos": 0})
+riesgo = riesgo.merge(conteo, on="clave", how="left").fillna({"reportes_ciudadanos": 0})    
 riesgo["reportes_ciudadanos"] = riesgo["reportes_ciudadanos"].astype(int)
 
 col1, col2, col3 = st.columns(3)
