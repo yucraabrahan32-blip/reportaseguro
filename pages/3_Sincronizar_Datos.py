@@ -1,6 +1,6 @@
 import streamlit as st
 
-from backend import servicio_regional, services
+from backend.fuentes import sincronizar_todos
 from database import db
 
 st.set_page_config(page_title="Sincronizar datos", page_icon="🔄", layout="wide")
@@ -13,21 +13,15 @@ st.write(
 
 if st.button("Sincronizar ahora", type="primary"):
     with st.spinner("Descargando y procesando el reporte..."):
-        try:
-            distrital = services.sincronizar_sidpol()
-            regional = servicio_regional.sincronizar_regional()
-        except Exception as error:
-            st.error(f"No se pudo sincronizar: {error}")
-        else:
-            st.success(
-                f"Sincronización completa: {distrital['filas_guardadas']} registros distritales "
-                f"y {regional['filas_guardadas']} regionales ({regional['regiones']} regiones)."
-            )
-            if regional["rechazadas"]:
-                st.warning(
-                    "Regiones descartadas por no pasar las validaciones: "
-                    + ", ".join(r for r, _ in regional["rechazadas"])
-                )
+        resultados, errores = sincronizar_todos()
+    for resultado in resultados:
+        st.success(f"{resultado.fuente}: {resultado.filas_guardadas} registros guardados.")
+        if resultado.advertencias:
+            with st.expander(f"{len(resultado.advertencias)} advertencia(s): {resultado.fuente}"):
+                for aviso in resultado.advertencias:
+                    st.text(aviso)
+    for nombre, error in errores:
+        st.error(f"{nombre}: no se pudo sincronizar ({error})")
 
 ultima = db.ultima_sincronizacion()
 if ultima:
