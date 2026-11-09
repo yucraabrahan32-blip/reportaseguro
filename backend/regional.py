@@ -6,6 +6,7 @@ import pandas as pd
 import pdfplumber
 
 from backend.conectores import URL_SIDPOL, descargar_pdf
+from backend.paginas import localizar_pagina
 
 # Orden inferido de los encabezados del PDF; verificar contra el original.
 CATEGORIAS = [
@@ -46,8 +47,8 @@ def _leer_pagina(ruta: Path, n_pagina: int) -> list:
 
 def extraer_regiones(ruta: Path):
     """Cruza las páginas 13 (ene. 2026) y 14 (ene. 2025 y 2026); solo acepta filas coherentes."""
-    p13 = {r: c for r, c, _ in _leer_pagina(ruta, 13)}
-    p14 = {r: c for r, c, _ in _leer_pagina(ruta, 14)}
+    p13 = {r: c for r, c, _ in _leer_pagina(ruta, localizar_pagina(ruta, ['II.3', 'AMAZONAS']))}
+    p14 = {r: c for r, c, _ in _leer_pagina(ruta, localizar_pagina(ruta, ['II.4', 'AMAZONAS']))}
     filas, rechazadas = [], []
     for region in sorted(set(p13) | set(p14)):
         a, b = p13.get(region), p14.get(region)

@@ -112,6 +112,31 @@ def verificar_contra_sidpol() -> None:
             print("  ", fila["distrito"], "|", fila["provincia"])
 
 
+class CatalogoUbigeo:
+    """Catálogo de ubicaciones del Perú: carga, consulta y comparación de nombres."""
+
+    def cargar(self) -> int:
+        return cargar_catalogo()
+
+    def departamentos(self) -> list[str]:
+        return db.listar_departamentos()
+
+    def provincias(self, departamento: str) -> list[str]:
+        return db.listar_provincias(departamento)
+
+    def distritos(self, departamento: str, provincia: str) -> list[str]:
+        return db.listar_distritos_de(departamento, provincia)
+
+    @staticmethod
+    def clave(nombre) -> str:
+        """Nombre normalizado y con alias aplicados, para cruzar fuentes distintas."""
+        normal = normalizar(nombre)
+        return ALIAS.get(normal, normal)
+
+    def verificar_contra_sidpol(self) -> None:
+        verificar_contra_sidpol()
+
+
 if __name__ == "__main__":
     print("Distritos cargados:", cargar_catalogo())
     verificar_contra_sidpol()

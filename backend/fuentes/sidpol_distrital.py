@@ -7,6 +7,7 @@ from backend.conectores import (
     CORRECCIONES, URL_SIDPOL, aplicar_correcciones, extraer_distritos,
 )
 from backend.fuentes.base import ConectorDatos
+from backend.paginas import localizar_pagina
 from database import db
 
 
@@ -14,11 +15,13 @@ class ConectorSIDPOLDistrital(ConectorDatos):
     nombre = "SIDPOL - distritos de Lima y Callao"
     fuente = "SIDPOL - Mininter"
     url = URL_SIDPOL
-    PAGINA = 30
+    MARCAS = ["V.2.1", "HOMICIDIO HURTO ROBO"]  # identifican la página por su contenido
     DELITOS = ["HOMICIDIO", "HURTO", "ROBO"]
 
     def extraer(self, archivo: Path) -> tuple[pd.DataFrame, list[str]]:
-        df, dudosas = extraer_distritos(archivo, self.PAGINA, self.DELITOS)
+        df, dudosas = extraer_distritos(
+            archivo, localizar_pagina(archivo, self.MARCAS), self.DELITOS
+        )
         df = aplicar_correcciones(df, CORRECCIONES)
         advertencias = [f"[{delito}] {texto} -> {motivo}" for delito, texto, motivo in dudosas]
         return df, advertencias

@@ -1,19 +1,7 @@
-"""Sincronización y análisis de denuncias por región."""
+"""Análisis de denuncias por región."""
 import pandas as pd
 
-from backend.conectores import URL_SIDPOL, descargar_pdf
-from backend.regional import extraer_regiones
 from backend.ubigeo import normalizar
-from database import db
-
-
-def sincronizar_regional() -> dict:
-    archivo = descargar_pdf(URL_SIDPOL)
-    df, rechazadas = extraer_regiones(archivo)
-    if df.empty:
-        raise ValueError("No se extrajo ninguna región; el formato del PDF pudo haber cambiado.")
-    filas = db.guardar_denuncias_regionales(df, "SIDPOL - Mininter", URL_SIDPOL, archivo.name)
-    return {"filas_guardadas": filas, "regiones": df["region"].nunique(), "rechazadas": rechazadas}
 
 
 def totales_por_region(df: pd.DataFrame, periodo: str) -> pd.DataFrame:
@@ -47,12 +35,3 @@ def coordenadas_regiones(catalogo: pd.DataFrame, regiones: list) -> pd.DataFrame
                 "longitud": sub["longitud"].mean(),
             })
     return pd.DataFrame(filas, columns=columnas)
-
-
-if __name__ == "__main__":
-    print(sincronizar_regional())
-    totales = totales_por_region(db.denuncias_regionales_df(), "2026-01")
-    print(totales.head(5).to_string(index=False))
-    control = totales[totales["region"].isin(["LIMA METROPOLITANA", "AREQUIPA"])]
-    print("\nControl (esperado: Lima Metropolitana 14474, Arequipa 1821):")
-    print(control.to_string(index=False))
