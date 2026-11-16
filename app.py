@@ -1,9 +1,11 @@
 import pandas as pd
 import streamlit as st
 
+from backend.acceso import barra_lateral
 from database import db
 
 st.set_page_config(page_title="ReportaSeguro", page_icon="🛡️", layout="wide")
+barra_lateral()
 
 URL_OBSERVATORIO = (
     "https://www.gob.pe/institucion/mininter/colecciones/"

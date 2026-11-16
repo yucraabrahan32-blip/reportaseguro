@@ -2,9 +2,11 @@ import plotly.express as px
 import streamlit as st
 
 from backend.ubigeo import ALIAS, normalizar
+from backend.acceso import barra_lateral
 from database import db
 
 st.set_page_config(page_title="Mapa", page_icon="🗺️", layout="wide")
+barra_lateral()
 st.title("🗺️ Mapa de incidentes")
 
 capa = st.radio(

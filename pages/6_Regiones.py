@@ -2,9 +2,11 @@ import plotly.express as px
 import streamlit as st
 
 from backend import servicio_regional as sr
+from backend.acceso import barra_lateral
 from database import db
 
 st.set_page_config(page_title="Regiones", page_icon="📍", layout="wide")
+barra_lateral()
 st.title("📍 Denuncias por región")
 
 df = db.denuncias_regionales_df()

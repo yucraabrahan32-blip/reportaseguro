@@ -2,10 +2,12 @@ import plotly.express as px
 import streamlit as st
 
 from backend import services
+from backend.acceso import barra_lateral
 from database import db
 from backend.ubigeo import ALIAS, normalizar
 
 st.set_page_config(page_title="Estadísticas", page_icon="📊", layout="wide")
+barra_lateral()
 st.title("📊 Riesgo por distrito")
 
 oficial = db.denuncias_oficiales_df()
