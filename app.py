@@ -23,7 +23,7 @@ def tabla(funcion) -> pd.DataFrame:
 
 
 def ultima_sync():
-    try:
+    try:    
         return db.ultima_sincronizacion()
     except Exception:
         return None

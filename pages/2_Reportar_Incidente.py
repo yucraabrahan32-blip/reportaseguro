@@ -2,6 +2,7 @@ from datetime import date
 
 import streamlit as st
 
+from backend.acceso import barra_lateral, es_admin
 from backend.models import DELITOS, Incidente, RepositorioIncidentes, Ubicacion
 from database import db
 
@@ -9,8 +10,12 @@ repo = RepositorioIncidentes()
 OPCIONES = list(DELITOS)
 
 st.set_page_config(page_title="Reportar incidente", page_icon="📝", layout="wide")
+barra_lateral()
 st.title("📝 Reportar incidente")
-st.caption("No escribas nombres, DNI ni teléfonos. Describe el hecho, no a las personas.")
+st.caption(
+    "El reporte es anónimo: no se pide cuenta. No escribas nombres, DNI ni teléfonos; "
+    "describe el hecho, no a las personas."
+)
 
 if "aviso" in st.session_state:
     st.success(st.session_state.pop("aviso"))
@@ -56,11 +61,18 @@ if enviado:
         st.rerun()
 
 st.divider()
-st.subheader("Gestionar reportes")
+st.subheader("Reportes recientes")
 
 incidentes = repo.listar(limite=200)
 if incidentes.empty:
     st.info("Todavía no hay reportes registrados.")
+    st.stop()
+
+if not es_admin():
+    st.dataframe(
+        incidentes.drop(columns=["descripcion"]).head(10), width="stretch", hide_index=True
+    )
+    st.caption("Las descripciones y la moderación (editar o eliminar) son solo para administradores.")
     st.stop()
 
 st.dataframe(incidentes.head(10), width="stretch", hide_index=True)
@@ -72,7 +84,7 @@ seleccion = st.selectbox(
 )
 fila = incidentes[incidentes["id"] == seleccion].iloc[0]
 
-st.markdown("**Editar** (la ubicación no se modifica; si te equivocaste de lugar, elimina y reporta de nuevo)")
+st.markdown("**Editar** (la ubicación no se modifica; si es incorrecta, elimina el reporte)")
 with st.form(f"form_editar_{seleccion}"):
     ed_delito = st.selectbox(
         "Tipo de incidente", OPCIONES,
