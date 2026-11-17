@@ -386,3 +386,91 @@ def cortes_cargados() -> dict:
         return {"distrital": distrital, "regional": regional}
     finally:
         con.close()
+
+
+TIPOS_FUENTE_EXTERNA = ("estatal", "ong")
+
+
+def _asegurar_tabla_indicadores(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS indicadores_externos (
+            id                INTEGER PRIMARY KEY,
+            fuente_id         INTEGER NOT NULL REFERENCES fuentes(id),
+            sincronizacion_id INTEGER NOT NULL REFERENCES sincronizaciones(id),
+            ambito            TEXT NOT NULL CHECK (ambito IN ('nacional', 'region', 'distrito')),
+            lugar             TEXT NOT NULL,
+            indicador         TEXT NOT NULL,
+            periodo           TEXT NOT NULL,
+            valor             REAL NOT NULL,
+            unidad            TEXT NOT NULL,
+            UNIQUE (fuente_id, ambito, lugar, indicador, periodo)
+        )
+        """
+    )
+
+
+def guardar_indicadores(df: pd.DataFrame, fuente: str, entidad: str, tipo: str,
+                        url: str, archivo: str) -> int:
+    """Guarda indicadores de una fuente externa. Si la fila ya existe, la actualiza."""
+    if tipo not in TIPOS_FUENTE_EXTERNA:
+        raise ValueError("El tipo de fuente debe ser 'estatal' u 'ong'.")
+    inicializar()
+    con = conectar()
+    try:
+        with con:
+            _asegurar_tabla_indicadores(con)
+            existente = con.execute(
+                "SELECT id, tipo FROM fuentes WHERE nombre = ?", (fuente,)
+            ).fetchone()
+            if existente and existente[1] != tipo:
+                raise ValueError(f"Ya existe una fuente llamada '{fuente}' de tipo '{existente[1]}'.")
+            if not existente:
+                con.execute(
+                    "INSERT INTO fuentes (nombre, entidad, tipo) VALUES (?, ?, ?)",
+                    (fuente, entidad, tipo),
+                )
+            fuente_id = con.execute(
+                "SELECT id FROM fuentes WHERE nombre = ?", (fuente,)
+            ).fetchone()[0]
+            sync_id = con.execute(
+                "INSERT INTO sincronizaciones (fuente_id, url, archivo, fecha_descarga, filas_cargadas) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (fuente_id, url, archivo, datetime.now().isoformat(timespec="seconds"), len(df)),
+            ).lastrowid
+            con.executemany(
+                """
+                INSERT INTO indicadores_externos
+                    (fuente_id, sincronizacion_id, ambito, lugar, indicador, periodo, valor, unidad)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (fuente_id, ambito, lugar, indicador, periodo) DO UPDATE SET
+                    valor = excluded.valor,
+                    unidad = excluded.unidad,
+                    sincronizacion_id = excluded.sincronizacion_id
+                """,
+                [
+                    (fuente_id, sync_id, r.ambito, r.lugar, r.indicador, r.periodo,
+                     float(r.valor), r.unidad)
+                    for r in df.itertuples()
+                ],
+            )
+        return len(df)
+    finally:
+        con.close()
+
+
+def indicadores_df() -> pd.DataFrame:
+    inicializar()
+    con = conectar()
+    try:
+        _asegurar_tabla_indicadores(con)
+        return pd.read_sql_query(
+            "SELECT i.ambito, i.lugar, i.indicador, i.periodo, i.valor, i.unidad, "
+            "       f.nombre AS fuente, f.entidad, f.tipo, s.url, s.fecha_descarga "
+            "FROM indicadores_externos i "
+            "JOIN fuentes f ON f.id = i.fuente_id "
+            "JOIN sincronizaciones s ON s.id = i.sincronizacion_id",
+            con,
+        )
+    finally:
+        con.close()
