@@ -1,6 +1,7 @@
 """Conector SIDPOL (Mininter): descarga el PDF y extrae denuncias por distrito."""
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 from statistics import median
 
 import pandas as pd
@@ -24,7 +25,7 @@ METRICAS = {
 
 def descargar_pdf(url: str) -> Path:
     CARPETA.mkdir(parents=True, exist_ok=True)
-    destino = CARPETA / url.split("/")[-1]
+    destino = CARPETA / urlparse(url).path.rsplit("/", 1)[-1]
     respuesta = requests.get(url, timeout=60)
     respuesta.raise_for_status()
     destino.write_bytes(respuesta.content)

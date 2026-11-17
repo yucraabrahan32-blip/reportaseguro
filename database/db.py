@@ -318,14 +318,21 @@ def _asegurar_tabla_regional(con: sqlite3.Connection) -> None:
             categoria         TEXT NOT NULL,
             periodo           TEXT NOT NULL,
             cantidad          INTEGER NOT NULL CHECK (cantidad >= 0),
+            corte             TEXT,
             UNIQUE (fuente_id, region, categoria, periodo)
         )
         """
     )
+    columnas = {f[1] for f in con.execute("PRAGMA table_info(denuncias_regionales)")}
+    if "corte" not in columnas:
+        # Base creada antes de registrar el mes de corte: eran cifras de enero de 2026.
+        con.execute("ALTER TABLE denuncias_regionales ADD COLUMN corte TEXT")
+        con.execute("UPDATE denuncias_regionales SET corte = '2026-01'")
+        con.execute("UPDATE denuncias_regionales SET periodo = substr(periodo, 1, 4)")
 
 
 def guardar_denuncias_regionales(df: pd.DataFrame, fuente: str, url: str, archivo: str) -> int:
-    """Guarda las denuncias por región. Si la fila ya existe, la actualiza."""
+    """Reemplaza las cifras regionales por las del reporte cargado; cada fila lleva su mes de corte."""
     inicializar()
     con = conectar()
     try:
@@ -339,17 +346,13 @@ def guardar_denuncias_regionales(df: pd.DataFrame, fuente: str, url: str, archiv
                 "VALUES (?, ?, ?, ?, ?)",
                 (fuente_id, url, archivo, datetime.now().isoformat(timespec="seconds"), len(df)),
             ).lastrowid
+            con.execute("DELETE FROM denuncias_regionales")
             con.executemany(
-                """
-                INSERT INTO denuncias_regionales
-                    (fuente_id, sincronizacion_id, region, categoria, periodo, cantidad)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT (fuente_id, region, categoria, periodo) DO UPDATE SET
-                    cantidad = excluded.cantidad,
-                    sincronizacion_id = excluded.sincronizacion_id
-                """,
+                "INSERT INTO denuncias_regionales "
+                "(fuente_id, sincronizacion_id, region, categoria, periodo, cantidad, corte) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (fuente_id, sync_id, r.region, r.categoria, r.periodo, int(r.cantidad))
+                    (fuente_id, sync_id, r.region, r.categoria, r.periodo, int(r.cantidad), r.corte)
                     for r in df.itertuples()
                 ],
             )
@@ -364,7 +367,22 @@ def denuncias_regionales_df() -> pd.DataFrame:
     try:
         _asegurar_tabla_regional(con)
         return pd.read_sql_query(
-            "SELECT region, categoria, periodo, cantidad FROM denuncias_regionales", con
+            "SELECT region, categoria, periodo, cantidad, corte FROM denuncias_regionales", con
         )
+    finally:
+        con.close()
+
+
+def cortes_cargados() -> dict:
+    """Mes de corte de los datos cargados: por distrito y por región (formato AAAA-MM o None)."""
+    inicializar()
+    con = conectar()
+    try:
+        _asegurar_tabla_regional(con)
+        distrital = con.execute(
+            "SELECT MAX(periodo) FROM denuncias_oficiales WHERE periodo LIKE '____-__'"
+        ).fetchone()[0]
+        regional = con.execute("SELECT MAX(corte) FROM denuncias_regionales").fetchone()[0]
+        return {"distrital": distrital, "regional": regional}
     finally:
         con.close()
