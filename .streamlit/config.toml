@@ -1,0 +1,8 @@
+# Tema base de ReportaSeguro. El pulido fino (tipografía, fichas, pestañas)
+# se aplica con CSS desde vistas/estilo.py.
+[theme]
+primaryColor = "#0e6b7a"            # verde petróleo institucional (acento de marca)
+backgroundColor = "#ffffff"         # área de contenido: blanca, legible para datos y mapas
+secondaryBackgroundColor = "#eef3f4"  # barra lateral y widgets: tinte frío suave
+textColor = "#0f1f2e"               # navy profundo (no negro puro)
+font = "sans serif"

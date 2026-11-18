@@ -8,8 +8,10 @@ la carpeta pages/, así que todo el menú se arma aquí.
 import streamlit as st
 
 from backend.acceso import es_admin, sesion_en_barra
+from vistas.estilo import aplicar_estilo
 
 st.set_page_config(page_title="ReportaSeguro", page_icon="🛡️", layout="wide")
+aplicar_estilo()
 
 # ---------- Páginas públicas (todo ciudadano) ----------
 INICIO = st.Page("vistas/inicio.py", title="Inicio", icon="🏠", default=True)
