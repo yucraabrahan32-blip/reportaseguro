@@ -1,20 +1,23 @@
+"""Administración: inicio de sesión y panel del administrador.
+
+Único punto de acceso para el personal autorizado. El ciudadano no necesita entrar aquí.
+"""
 import streamlit as st
 
-from backend.acceso import CLAVE_SESION, es_admin, intentar_login
+from backend.acceso import CLAVE_SESION, cerrar_sesion, es_admin, intentar_login
 from database import usuarios
 
-st.set_page_config(page_title="Administración", page_icon="🔐", layout="wide")
 st.title("🔐 Administración")
 
 if es_admin():
     st.success(f"Sesión iniciada como {st.session_state[CLAVE_SESION]}.")
     st.write("Como administrador puedes:")
-    st.page_link("pages/2_Reportar_Incidente.py", label="Ver, editar y eliminar reportes", icon="📝")
-    st.page_link("pages/3_Sincronizar_Datos.py", label="Sincronizar los datos oficiales", icon="🔄")
-    st.page_link("pages/7_Reportes.py", label="Descargar los reportes en CSV", icon="📑")
-    st.page_link("pages/9_Indicadores_Externos.py", label="Cargar indicadores de otras fuentes", icon="🏛️")
+    st.page_link("vistas/reportar.py", label="Ver, editar y eliminar reportes", icon="📝")
+    st.page_link("vistas/sincronizar.py", label="Sincronizar los datos oficiales", icon="🔄")
+    st.page_link("vistas/reportes.py", label="Descargar los reportes en CSV", icon="📑")
+    st.page_link("vistas/consultar.py", label="Cargar indicadores de otras fuentes", icon="🏛️")
     if st.button("Cerrar sesión"):
-        st.session_state.pop(CLAVE_SESION, None)
+        cerrar_sesion()
         st.rerun()
     st.stop()
 

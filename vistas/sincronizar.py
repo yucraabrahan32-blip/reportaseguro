@@ -1,12 +1,11 @@
+"""Sincronizar datos oficiales del SIDPOL. Solo administradores pueden ejecutar la descarga."""
 import streamlit as st
 
-from backend.acceso import barra_lateral, es_admin
+from backend.acceso import es_admin
 from backend.fuentes import sincronizar_todos
 from backend.fuentes.novedades import NOMBRES, ultimo_reporte
 from database import db
 
-st.set_page_config(page_title="Sincronizar datos", page_icon="🔄", layout="wide")
-barra_lateral()
 st.title("🔄 Sincronizar datos oficiales")
 st.write(
     "Descarga reportes del Ministerio del Interior (SIDPOL), extrae las denuncias por "
@@ -38,7 +37,7 @@ if es_admin():
         for nombre, error in errores:
             st.error(f"{nombre}: no se pudo sincronizar ({error})")
 else:
-    st.info("Solo un administrador puede sincronizar. Inicia sesión en la página Administracion.")
+    st.info("Solo un administrador puede sincronizar. Inicia sesión en la página Administración.")
 
 cortes = db.cortes_cargados()
 c1, c2 = st.columns(2)

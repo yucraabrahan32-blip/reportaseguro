@@ -1,16 +1,15 @@
+"""Reportar un incidente. La moderación (editar/eliminar) es solo para administradores."""
 from datetime import date
 
 import streamlit as st
 
-from backend.acceso import barra_lateral, es_admin
+from backend.acceso import es_admin
 from backend.models import DELITOS, Incidente, RepositorioIncidentes, Ubicacion
 from database import db
 
 repo = RepositorioIncidentes()
 OPCIONES = list(DELITOS)
 
-st.set_page_config(page_title="Reportar incidente", page_icon="📝", layout="wide")
-barra_lateral()
 st.title("📝 Reportar incidente")
 st.caption(
     "El reporte es anónimo: no se pide cuenta. No escribas nombres, DNI ni teléfonos; "

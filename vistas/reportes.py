@@ -1,17 +1,16 @@
+"""Reportes: análisis agregado de los incidentes ciudadanos. La descarga CSV es solo para admin."""
 import plotly.express as px
 import streamlit as st
 
-from backend.acceso import barra_lateral, es_admin
+from backend.acceso import es_admin
 from backend.models import AnalizadorIncidentes
 from database import db
 
-st.set_page_config(page_title="Reportes", page_icon="📑", layout="wide")
-barra_lateral()
 st.title("📑 Reportes de incidentes ciudadanos")
 
 datos = db.incidentes_df()
 if datos.empty:
-    st.info("Aún no hay reportes. Registra alguno en 'Reportar Incidente'.")
+    st.info("Aún no hay reportes. Registra alguno en 'Reportar un incidente'.")
     st.stop()
 
 col1, col2 = st.columns(2)
