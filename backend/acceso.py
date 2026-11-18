@@ -2,12 +2,25 @@
 import streamlit as st
 
 from database import usuarios
+from database.limite_login import verificar_con_limite
 
 CLAVE_SESION = "admin_usuario"
 
 
 def es_admin() -> bool:
     return bool(st.session_state.get(CLAVE_SESION))
+
+
+def intentar_login(usuario: str, clave: str) -> None:
+    """Valida las credenciales con límite de intentos y muestra el resultado en pantalla."""
+    resultado = verificar_con_limite(usuario, clave)
+    if resultado.estado == "ok":
+        st.session_state[CLAVE_SESION] = usuario.strip().lower()
+        st.rerun()
+    elif resultado.estado == "bloqueado":
+        st.error(f"Demasiados intentos fallidos. Espera {resultado.segundos} segundos para volver a intentar.")
+    else:
+        st.error(f"Usuario o clave incorrectos. Intentos restantes: {resultado.restantes}.")
 
 
 def barra_lateral() -> None:
@@ -29,8 +42,4 @@ def barra_lateral() -> None:
                 clave = st.text_input("Clave", type="password")
                 entrar = st.form_submit_button("Entrar")
             if entrar:
-                if usuarios.verificar(usuario, clave):
-                    st.session_state[CLAVE_SESION] = usuario.strip().lower()
-                    st.rerun()
-                else:
-                    st.error("Usuario o clave incorrectos.")
+                intentar_login(usuario, clave)

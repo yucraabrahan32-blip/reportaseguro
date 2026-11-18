@@ -1,6 +1,6 @@
 import streamlit as st
 
-from backend.acceso import CLAVE_SESION, es_admin
+from backend.acceso import CLAVE_SESION, es_admin, intentar_login
 from database import usuarios
 
 st.set_page_config(page_title="Administración", page_icon="🔐", layout="wide")
@@ -12,6 +12,7 @@ if es_admin():
     st.page_link("pages/2_Reportar_Incidente.py", label="Ver, editar y eliminar reportes", icon="📝")
     st.page_link("pages/3_Sincronizar_Datos.py", label="Sincronizar los datos oficiales", icon="🔄")
     st.page_link("pages/7_Reportes.py", label="Descargar los reportes en CSV", icon="📑")
+    st.page_link("pages/9_Indicadores_Externos.py", label="Cargar indicadores de otras fuentes", icon="🏛️")
     if st.button("Cerrar sesión"):
         st.session_state.pop(CLAVE_SESION, None)
         st.rerun()
@@ -28,8 +29,4 @@ with st.form("login_admin_pagina"):
     entrar = st.form_submit_button("Entrar")
 
 if entrar:
-    if usuarios.verificar(usuario, clave):
-        st.session_state[CLAVE_SESION] = usuario.strip().lower()
-        st.rerun()
-    else:
-        st.error("Usuario o clave incorrectos.")
+    intentar_login(usuario, clave)
