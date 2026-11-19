@@ -100,10 +100,27 @@ a, a:visited { color: #0e6b7a; }
 /* ---------- Tarjetas (st.container con borde) ---------- */
 [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 12px; }
 
-/* ---------- Ocultar cromo de Streamlit para un look propio ---------- */
+/* ---------- La barra lateral y su control siempre visibles ---------- */
+[data-testid="stSidebar"] { visibility: visible !important; }
+[data-testid="stSidebarCollapsedControl"] {
+    visibility: visible !important;
+    z-index: 1000;
+}
+
+/* ---------- Ocultar cromo de Streamlit (sin tocar la barra lateral) ---------- */
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-[data-testid="stToolbar"] { display: none; }
+[data-testid="stToolbar"] [data-testid="stActionButton"] { display: none; }
+
+/* ---------- Restaurar la fuente de iconos (Material Symbols) ----------
+   El override de Inter con !important rompía las ligaduras de los iconos y
+   mostraba su nombre como texto (p. ej. "keyboard_double_arrow_left"). */
+[data-testid="stIconMaterial"],
+.material-symbols-rounded,
+.material-symbols-outlined,
+.material-icons {
+    font-family: 'Material Symbols Rounded', 'Material Symbols Outlined', 'Material Icons' !important;
+}
 </style>
 """
 
