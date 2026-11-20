@@ -2,10 +2,13 @@
 import hashlib
 import hmac
 import secrets
-import sqlite3
 from datetime import datetime
 
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+
 from database import db
+from database.modelos import Administrador, Session
 
 ITERACIONES = 600_000
 CLAVE_MIN = 10
@@ -38,19 +41,6 @@ def _hash_falso() -> str:
     return _FALSO
 
 
-def _asegurar_tabla(con: sqlite3.Connection) -> None:
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS administradores (
-            id         INTEGER PRIMARY KEY,
-            usuario    TEXT NOT NULL UNIQUE,
-            clave_hash TEXT NOT NULL,
-            creado_en  TEXT NOT NULL
-        )
-        """
-    )
-
-
 def crear_admin(usuario: str, clave: str) -> None:
     usuario = usuario.strip().lower()
     if not usuario:
@@ -58,42 +48,29 @@ def crear_admin(usuario: str, clave: str) -> None:
     if len(clave) < CLAVE_MIN:
         raise ValueError(f"La clave debe tener al menos {CLAVE_MIN} caracteres.")
     db.inicializar()
-    con = db.conectar()
     try:
-        with con:
-            _asegurar_tabla(con)
-            con.execute(
-                "INSERT INTO administradores (usuario, clave_hash, creado_en) VALUES (?, ?, ?)",
-                (usuario, hashear(clave), datetime.now().isoformat(timespec="seconds")),
-            )
-    except sqlite3.IntegrityError:
+        with Session.begin() as s:
+            s.add(Administrador(
+                usuario=usuario, clave_hash=hashear(clave),
+                creado_en=datetime.now().isoformat(timespec="seconds"),
+            ))
+    except IntegrityError:
         raise ValueError("Ese usuario ya existe.") from None
-    finally:
-        con.close()
 
 
 def hay_admins() -> bool:
     db.inicializar()
-    con = db.conectar()
-    try:
-        _asegurar_tabla(con)
-        return con.execute("SELECT COUNT(*) FROM administradores").fetchone()[0] > 0
-    finally:
-        con.close()
+    with Session() as s:
+        return s.scalar(select(func.count()).select_from(Administrador)) > 0
 
 
 def verificar(usuario: str, clave: str) -> bool:
     db.inicializar()
-    con = db.conectar()
-    try:
-        _asegurar_tabla(con)
-        fila = con.execute(
-            "SELECT clave_hash FROM administradores WHERE usuario = ?",
-            (usuario.strip().lower(),),
-        ).fetchone()
-    finally:
-        con.close()
-    if fila is None:
+    with Session() as s:
+        guardado = s.scalar(
+            select(Administrador.clave_hash).where(Administrador.usuario == usuario.strip().lower())
+        )
+    if guardado is None:
         comprobar(clave, _hash_falso())  # gasta el mismo tiempo que un usuario real
         return False
-    return comprobar(clave, fila[0])
+    return comprobar(clave, guardado)

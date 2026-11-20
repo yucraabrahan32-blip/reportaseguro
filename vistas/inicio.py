@@ -101,10 +101,7 @@ st.divider()
 cA, cB = st.columns(2)
 with cA:
     st.markdown("**Equipo (Grupo 07)**")
-    st.caption("Abrahan Emanuel Yucra Illanes (U22224776)")
-    st.caption("[Integrante 2: nombre y código]")
-    st.caption("[Integrante 3: nombre y código]")
-    st.caption("Docente: MBA Mg. Ing. Rene Alonso Nieto Valencia")
+
 with cB:
     st.markdown("**Fuentes y enlaces**")
     st.markdown(f"[Observatorio Nacional de Seguridad Ciudadana]({URL_OBSERVATORIO})")

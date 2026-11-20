@@ -1,84 +1,56 @@
-"""Persistencia SQLite de ReportaSeguro."""
-import sqlite3
+"""Persistencia de ReportaSeguro con SQLAlchemy (ORM) sobre SQLite."""
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-RUTA_DB = Path("database/reportaseguro.db")
+from database.modelos import (
+    Base, DenunciaOficial, DenunciaRegional, IncidenteCiudadano, IndicadorExterno,
+    Fuente, Session, Sincronizacion, Ubigeo, engine,
+)
+
 PERIODOS = {"anio_2024": "2024", "anio_2025": "2025", "ene_2026": "2026-01"}
-
-ESQUEMA = """
-CREATE TABLE IF NOT EXISTS fuentes (
-    id      INTEGER PRIMARY KEY,
-    nombre  TEXT NOT NULL UNIQUE,
-    entidad TEXT NOT NULL,
-    tipo    TEXT NOT NULL CHECK (tipo IN ('estatal', 'ong', 'ciudadana'))
-);
-
-CREATE TABLE IF NOT EXISTS sincronizaciones (
-    id             INTEGER PRIMARY KEY,
-    fuente_id      INTEGER NOT NULL REFERENCES fuentes(id),
-    url            TEXT NOT NULL,
-    archivo        TEXT NOT NULL,
-    fecha_descarga TEXT NOT NULL,
-    filas_cargadas INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS denuncias_oficiales (
-    id                INTEGER PRIMARY KEY,
-    fuente_id         INTEGER NOT NULL REFERENCES fuentes(id),
-    sincronizacion_id INTEGER NOT NULL REFERENCES sincronizaciones(id),
-    distrito          TEXT NOT NULL,
-    delito            TEXT NOT NULL,
-    periodo           TEXT NOT NULL,
-    cantidad          INTEGER NOT NULL CHECK (cantidad >= 0),
-    correccion_manual INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (fuente_id, distrito, delito, periodo)
-);
-
-CREATE TABLE IF NOT EXISTS incidentes_ciudadanos (
-    id           INTEGER PRIMARY KEY,
-    departamento TEXT,
-    provincia    TEXT,
-    distrito     TEXT NOT NULL,
-    delito       TEXT NOT NULL,
-    fecha_hecho  TEXT NOT NULL,
-    hora_hecho   TEXT NOT NULL,
-    descripcion  TEXT NOT NULL,
-    creado_en    TEXT NOT NULL
-);
-"""
-
-
-def conectar() -> sqlite3.Connection:
-    RUTA_DB.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(RUTA_DB)
-    con.execute("PRAGMA foreign_keys = ON")
-    return con
-
-
-def _migrar(con: sqlite3.Connection) -> None:
-    """Agrega columnas nuevas a bases creadas con versiones anteriores."""
-    columnas = {f[1] for f in con.execute("PRAGMA table_info(incidentes_ciudadanos)")}
-    for nombre in ("departamento", "provincia"):
-        if nombre not in columnas:
-            con.execute(f"ALTER TABLE incidentes_ciudadanos ADD COLUMN {nombre} TEXT")
+TIPOS_FUENTE_EXTERNA = ("estatal", "ong")
+_LISTO = False
 
 
 def inicializar() -> None:
-    con = conectar()
-    try:
-        with con:
-            con.executescript(ESQUEMA)
-            _migrar(con)
-            con.execute(
-                "INSERT OR IGNORE INTO fuentes (nombre, entidad, tipo) VALUES (?, ?, ?)",
-                ("SIDPOL - Mininter", "Ministerio del Interior", "estatal"),
-            )
-    finally:
-        con.close()
+    """Crea las tablas que falten y registra la fuente SIDPOL (una sola vez por ejecución)."""
+    global _LISTO
+    if _LISTO:
+        return
+    Base.metadata.create_all(engine)
+    with Session.begin() as s:
+        if s.scalar(select(Fuente.id).where(Fuente.nombre == "SIDPOL - Mininter")) is None:
+            s.add(Fuente(nombre="SIDPOL - Mininter", entidad="Ministerio del Interior", tipo="estatal"))
+    _LISTO = True
 
+
+def consulta_df(stmt) -> pd.DataFrame:
+    """Ejecuta un select de SQLAlchemy y devuelve un DataFrame."""
+    inicializar()
+    with engine.connect() as con:
+        return pd.read_sql_query(stmt, con)
+
+
+def _columna(stmt) -> list:
+    inicializar()
+    with Session() as s:
+        return list(s.scalars(stmt))
+
+
+def _nueva_sync(s, fuente_id: int, url: str, archivo: str, filas: int) -> int:
+    sync = Sincronizacion(
+        fuente_id=fuente_id, url=url, archivo=archivo,
+        fecha_descarga=datetime.now().isoformat(timespec="seconds"), filas_cargadas=filas,
+    )
+    s.add(sync)
+    s.flush()
+    return sync.id
+
+
+# ---------- Denuncias oficiales (distritos) ----------
 
 def guardar_denuncias_oficiales(df: pd.DataFrame, fuente: str, url: str, archivo: str) -> int:
     """Guarda el DataFrame en formato largo. Si ya existe la fila, la actualiza."""
@@ -91,67 +63,61 @@ def guardar_denuncias_oficiales(df: pd.DataFrame, fuente: str, url: str, archivo
     largo["periodo"] = largo["col"].map(PERIODOS)
 
     inicializar()
-    con = conectar()
-    try:
-        with con:
-            fuente_id = con.execute(
-                "SELECT id FROM fuentes WHERE nombre = ?", (fuente,)
-            ).fetchone()[0]
-            sync_id = con.execute(
-                "INSERT INTO sincronizaciones (fuente_id, url, archivo, fecha_descarga, filas_cargadas) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (fuente_id, url, archivo, datetime.now().isoformat(timespec="seconds"), len(largo)),
-            ).lastrowid
-            con.executemany(
-                """
-                INSERT INTO denuncias_oficiales
-                    (fuente_id, sincronizacion_id, distrito, delito, periodo, cantidad, correccion_manual)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (fuente_id, distrito, delito, periodo) DO UPDATE SET
-                    cantidad = excluded.cantidad,
-                    correccion_manual = excluded.correccion_manual,
-                    sincronizacion_id = excluded.sincronizacion_id
-                """,
-                [
-                    (fuente_id, sync_id, r.distrito, r.delito, r.periodo,
-                     int(r.cantidad), int(r.correccion_manual))
-                    for r in largo.itertuples()
-                ],
-            )
-        return len(largo)
-    finally:
-        con.close()
+    with Session.begin() as s:
+        fuente_id = s.scalar(select(Fuente.id).where(Fuente.nombre == fuente))
+        sync_id = _nueva_sync(s, fuente_id, url, archivo, len(largo))
+        filas = [
+            {"fuente_id": fuente_id, "sincronizacion_id": sync_id, "distrito": r.distrito,
+             "delito": r.delito, "periodo": r.periodo, "cantidad": int(r.cantidad),
+             "correccion_manual": int(r.correccion_manual)}
+            for r in largo.itertuples()
+        ]
+        stmt = sqlite_insert(DenunciaOficial)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["fuente_id", "distrito", "delito", "periodo"],
+            set_={
+                "cantidad": stmt.excluded.cantidad,
+                "correccion_manual": stmt.excluded.correccion_manual,
+                "sincronizacion_id": stmt.excluded.sincronizacion_id,
+            },
+        )
+        s.execute(stmt, filas)
+    return len(largo)
+
+
+def denuncias_oficiales_df() -> pd.DataFrame:
+    return consulta_df(select(
+        DenunciaOficial.distrito, DenunciaOficial.delito, DenunciaOficial.periodo,
+        DenunciaOficial.cantidad, DenunciaOficial.correccion_manual,
+    ))
 
 
 # ---------- Catálogo de ubigeo (se carga con: python -m backend.ubigeo) ----------
 
-def _consulta_ubigeo(sql: str, params: tuple = ()) -> list:
-    inicializar()
-    con = conectar()
-    try:
-        return [f[0] for f in con.execute(sql, params).fetchall()]
-    except sqlite3.OperationalError:
-        return []  # la tabla ubigeo aún no existe
-    finally:
-        con.close()
-
-
 def listar_departamentos() -> list[str]:
-    return _consulta_ubigeo("SELECT DISTINCT departamento FROM ubigeo ORDER BY departamento")
+    return _columna(select(Ubigeo.departamento).distinct().order_by(Ubigeo.departamento))
 
 
 def listar_provincias(departamento: str) -> list[str]:
-    return _consulta_ubigeo(
-        "SELECT DISTINCT provincia FROM ubigeo WHERE departamento = ? ORDER BY provincia",
-        (departamento,),
+    return _columna(
+        select(Ubigeo.provincia).where(Ubigeo.departamento == departamento)
+        .distinct().order_by(Ubigeo.provincia)
     )
 
 
 def listar_distritos_de(departamento: str, provincia: str) -> list[str]:
-    return _consulta_ubigeo(
-        "SELECT distrito FROM ubigeo WHERE departamento = ? AND provincia = ? ORDER BY distrito",
-        (departamento, provincia),
+    return _columna(
+        select(Ubigeo.distrito)
+        .where(Ubigeo.departamento == departamento, Ubigeo.provincia == provincia)
+        .order_by(Ubigeo.distrito)
     )
+
+
+def ubigeo_df() -> pd.DataFrame:
+    return consulta_df(select(
+        Ubigeo.departamento, Ubigeo.provincia, Ubigeo.distrito,
+        Ubigeo.nombre_norm, Ubigeo.latitud, Ubigeo.longitud,
+    ))
 
 
 # ---------- Incidentes ciudadanos ----------
@@ -159,57 +125,62 @@ def listar_distritos_de(departamento: str, provincia: str) -> list[str]:
 def guardar_incidente(departamento: str, provincia: str, distrito: str, delito: str,
                       fecha_hecho: str, hora_hecho: str, descripcion: str) -> int:
     inicializar()
-    con = conectar()
-    try:
-        with con:
-            return con.execute(
-                "INSERT INTO incidentes_ciudadanos "
-                "(departamento, provincia, distrito, delito, fecha_hecho, hora_hecho, "
-                " descripcion, creado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (departamento, provincia, distrito, delito, fecha_hecho, hora_hecho,
-                 descripcion.strip(), datetime.now().isoformat(timespec="seconds")),
-            ).lastrowid
-    finally:
-        con.close()
+    with Session.begin() as s:
+        incidente = IncidenteCiudadano(
+            departamento=departamento, provincia=provincia, distrito=distrito, delito=delito,
+            fecha_hecho=fecha_hecho, hora_hecho=hora_hecho, descripcion=descripcion.strip(),
+            creado_en=datetime.now().isoformat(timespec="seconds"),
+        )
+        s.add(incidente)
+        s.flush()
+        return incidente.id
 
 
 def listar_incidentes(limite: int = 10) -> pd.DataFrame:
-    inicializar()
-    con = conectar()
-    try:
-        return pd.read_sql_query(
-            "SELECT id, departamento, provincia, distrito, delito, fecha_hecho, "
-            "hora_hecho, descripcion FROM incidentes_ciudadanos ORDER BY id DESC LIMIT ?",
-            con, params=(limite,),
-        )
-    finally:
-        con.close()
+    return consulta_df(
+        select(
+            IncidenteCiudadano.id, IncidenteCiudadano.departamento, IncidenteCiudadano.provincia,
+            IncidenteCiudadano.distrito, IncidenteCiudadano.delito, IncidenteCiudadano.fecha_hecho,
+            IncidenteCiudadano.hora_hecho, IncidenteCiudadano.descripcion,
+        ).order_by(IncidenteCiudadano.id.desc()).limit(limite)
+    )
 
 
 def actualizar_incidente(id_incidente: int, delito: str, descripcion: str) -> bool:
     """Solo se editan el tipo y la descripción; la ubicación no cambia."""
     inicializar()
-    con = conectar()
-    try:
-        with con:
-            cur = con.execute(
-                "UPDATE incidentes_ciudadanos SET delito = ?, descripcion = ? WHERE id = ?",
-                (delito, descripcion.strip(), id_incidente),
-            )
-            return cur.rowcount > 0
-    finally:
-        con.close()
+    with Session.begin() as s:
+        resultado = s.execute(
+            update(IncidenteCiudadano).where(IncidenteCiudadano.id == id_incidente)
+            .values(delito=delito, descripcion=descripcion.strip())
+        )
+        return resultado.rowcount > 0
 
 
 def eliminar_incidente(id_incidente: int) -> bool:
     inicializar()
-    con = conectar()
-    try:
-        with con:
-            cur = con.execute("DELETE FROM incidentes_ciudadanos WHERE id = ?", (id_incidente,))
-            return cur.rowcount > 0
-    finally:
-        con.close()
+    with Session.begin() as s:
+        resultado = s.execute(delete(IncidenteCiudadano).where(IncidenteCiudadano.id == id_incidente))
+        return resultado.rowcount > 0
+
+
+def incidentes_df() -> pd.DataFrame:
+    return consulta_df(select(
+        IncidenteCiudadano.id, IncidenteCiudadano.departamento, IncidenteCiudadano.provincia,
+        IncidenteCiudadano.distrito, IncidenteCiudadano.delito,
+        IncidenteCiudadano.fecha_hecho, IncidenteCiudadano.hora_hecho,
+    ))
+
+
+def incidentes_con_coordenadas() -> pd.DataFrame:
+    """Reportes ciudadanos unidos al catálogo para obtener las coordenadas del distrito."""
+    i, u = IncidenteCiudadano, Ubigeo
+    return consulta_df(
+        select(i.id, i.departamento, i.provincia, i.distrito, i.delito, u.latitud, u.longitud)
+        .join(u, (u.departamento == i.departamento) & (u.provincia == i.provincia)
+              & (u.distrito == i.distrito))
+        .where(u.latitud.is_not(None), u.longitud.is_not(None))
+    )
 
 
 # ---------- Sincronizaciones ----------
@@ -217,198 +188,64 @@ def eliminar_incidente(id_incidente: int) -> bool:
 def ultima_sincronizacion():
     """Devuelve la última sincronización como diccionario, o None si no hay."""
     inicializar()
-    con = conectar()
-    try:
-        fila = con.execute(
-            "SELECT f.nombre, s.archivo, s.fecha_descarga, s.filas_cargadas "
-            "FROM sincronizaciones s JOIN fuentes f ON f.id = s.fuente_id "
-            "ORDER BY s.id DESC LIMIT 1"
-        ).fetchone()
-        if fila is None:
-            return None
-        return {"fuente": fila[0], "archivo": fila[1], "fecha": fila[2], "filas": fila[3]}
-    finally:
-        con.close()
+    with Session() as s:
+        fila = s.execute(
+            select(Fuente.nombre, Sincronizacion.archivo,
+                   Sincronizacion.fecha_descarga, Sincronizacion.filas_cargadas)
+            .join(Fuente, Fuente.id == Sincronizacion.fuente_id)
+            .order_by(Sincronizacion.id.desc()).limit(1)
+        ).first()
+    if fila is None:
+        return None
+    return {"fuente": fila[0], "archivo": fila[1], "fecha": fila[2], "filas": fila[3]}
 
 
 def historial_sincronizaciones(limite: int = 10) -> pd.DataFrame:
-    inicializar()
-    con = conectar()
-    try:
-        return pd.read_sql_query(
-            "SELECT s.id, f.nombre AS fuente, s.fecha_descarga, s.archivo, s.filas_cargadas "
-            "FROM sincronizaciones s JOIN fuentes f ON f.id = s.fuente_id "
-            "ORDER BY s.id DESC LIMIT ?",
-            con, params=(limite,),
-        )
-    finally:
-        con.close()
-
-
-# ---------- DataFrames para estadísticas ----------
-
-def denuncias_oficiales_df() -> pd.DataFrame:
-    inicializar()
-    con = conectar()
-    try:
-        return pd.read_sql_query(
-            "SELECT distrito, delito, periodo, cantidad, correccion_manual "
-            "FROM denuncias_oficiales",
-            con,
-        )
-    finally:
-        con.close()
-
-
-def incidentes_df() -> pd.DataFrame:
-    inicializar()
-    con = conectar()
-    try:
-        return pd.read_sql_query(
-            "SELECT id, departamento, provincia, distrito, delito, fecha_hecho, hora_hecho "
-            "FROM incidentes_ciudadanos",
-            con,
-        )
-    finally:
-        con.close()
-
-def ubigeo_df() -> pd.DataFrame:
-    inicializar()
-    con = conectar()
-    try:
-        return pd.read_sql_query(
-            "SELECT departamento, provincia, distrito, nombre_norm, latitud, longitud "
-            "FROM ubigeo",
-            con,
-        )
-    except (sqlite3.OperationalError, pd.errors.DatabaseError):
-        return pd.DataFrame()  # la tabla ubigeo aún no existe
-    finally:
-        con.close()
-
-
-def incidentes_con_coordenadas() -> pd.DataFrame:
-    """Reportes ciudadanos unidos al catálogo para obtener las coordenadas del distrito."""
-    inicializar()
-    con = conectar()
-    try:
-        return pd.read_sql_query(
-            "SELECT i.id, i.departamento, i.provincia, i.distrito, i.delito, "
-            "       u.latitud, u.longitud "
-            "FROM incidentes_ciudadanos i "
-            "JOIN ubigeo u ON u.departamento = i.departamento "
-            "             AND u.provincia = i.provincia "
-            "             AND u.distrito = i.distrito "
-            "WHERE u.latitud IS NOT NULL AND u.longitud IS NOT NULL",
-            con,
-        )
-    except (sqlite3.OperationalError, pd.errors.DatabaseError):
-        return pd.DataFrame()
-    finally:
-        con.close()
-
-def _asegurar_tabla_regional(con: sqlite3.Connection) -> None:
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS denuncias_regionales (
-            id                INTEGER PRIMARY KEY,
-            fuente_id         INTEGER NOT NULL REFERENCES fuentes(id),
-            sincronizacion_id INTEGER NOT NULL REFERENCES sincronizaciones(id),
-            region            TEXT NOT NULL,
-            categoria         TEXT NOT NULL,
-            periodo           TEXT NOT NULL,
-            cantidad          INTEGER NOT NULL CHECK (cantidad >= 0),
-            corte             TEXT,
-            UNIQUE (fuente_id, region, categoria, periodo)
-        )
-        """
+    return consulta_df(
+        select(Sincronizacion.id, Fuente.nombre.label("fuente"), Sincronizacion.fecha_descarga,
+               Sincronizacion.archivo, Sincronizacion.filas_cargadas)
+        .join(Fuente, Fuente.id == Sincronizacion.fuente_id)
+        .order_by(Sincronizacion.id.desc()).limit(limite)
     )
-    columnas = {f[1] for f in con.execute("PRAGMA table_info(denuncias_regionales)")}
-    if "corte" not in columnas:
-        # Base creada antes de registrar el mes de corte: eran cifras de enero de 2026.
-        con.execute("ALTER TABLE denuncias_regionales ADD COLUMN corte TEXT")
-        con.execute("UPDATE denuncias_regionales SET corte = '2026-01'")
-        con.execute("UPDATE denuncias_regionales SET periodo = substr(periodo, 1, 4)")
 
+
+# ---------- Denuncias regionales ----------
 
 def guardar_denuncias_regionales(df: pd.DataFrame, fuente: str, url: str, archivo: str) -> int:
     """Reemplaza las cifras regionales por las del reporte cargado; cada fila lleva su mes de corte."""
     inicializar()
-    con = conectar()
-    try:
-        with con:
-            _asegurar_tabla_regional(con)
-            fuente_id = con.execute(
-                "SELECT id FROM fuentes WHERE nombre = ?", (fuente,)
-            ).fetchone()[0]
-            sync_id = con.execute(
-                "INSERT INTO sincronizaciones (fuente_id, url, archivo, fecha_descarga, filas_cargadas) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (fuente_id, url, archivo, datetime.now().isoformat(timespec="seconds"), len(df)),
-            ).lastrowid
-            con.execute("DELETE FROM denuncias_regionales")
-            con.executemany(
-                "INSERT INTO denuncias_regionales "
-                "(fuente_id, sincronizacion_id, region, categoria, periodo, cantidad, corte) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (fuente_id, sync_id, r.region, r.categoria, r.periodo, int(r.cantidad), r.corte)
-                    for r in df.itertuples()
-                ],
-            )
-        return len(df)
-    finally:
-        con.close()
+    with Session.begin() as s:
+        fuente_id = s.scalar(select(Fuente.id).where(Fuente.nombre == fuente))
+        sync_id = _nueva_sync(s, fuente_id, url, archivo, len(df))
+        s.execute(delete(DenunciaRegional))
+        s.execute(
+            sqlite_insert(DenunciaRegional),
+            [{"fuente_id": fuente_id, "sincronizacion_id": sync_id, "region": r.region,
+              "categoria": r.categoria, "periodo": r.periodo, "cantidad": int(r.cantidad),
+              "corte": r.corte} for r in df.itertuples()],
+        )
+    return len(df)
 
 
 def denuncias_regionales_df() -> pd.DataFrame:
-    inicializar()
-    con = conectar()
-    try:
-        _asegurar_tabla_regional(con)
-        return pd.read_sql_query(
-            "SELECT region, categoria, periodo, cantidad, corte FROM denuncias_regionales", con
-        )
-    finally:
-        con.close()
+    return consulta_df(select(
+        DenunciaRegional.region, DenunciaRegional.categoria, DenunciaRegional.periodo,
+        DenunciaRegional.cantidad, DenunciaRegional.corte,
+    ))
 
 
 def cortes_cargados() -> dict:
-    """Mes de corte de los datos cargados: por distrito y por región (formato AAAA-MM o None)."""
+    """Mes de corte de los datos cargados: por distrito y por región (AAAA-MM o None)."""
     inicializar()
-    con = conectar()
-    try:
-        _asegurar_tabla_regional(con)
-        distrital = con.execute(
-            "SELECT MAX(periodo) FROM denuncias_oficiales WHERE periodo LIKE '____-__'"
-        ).fetchone()[0]
-        regional = con.execute("SELECT MAX(corte) FROM denuncias_regionales").fetchone()[0]
-        return {"distrital": distrital, "regional": regional}
-    finally:
-        con.close()
-
-
-TIPOS_FUENTE_EXTERNA = ("estatal", "ong")
-
-
-def _asegurar_tabla_indicadores(con: sqlite3.Connection) -> None:
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS indicadores_externos (
-            id                INTEGER PRIMARY KEY,
-            fuente_id         INTEGER NOT NULL REFERENCES fuentes(id),
-            sincronizacion_id INTEGER NOT NULL REFERENCES sincronizaciones(id),
-            ambito            TEXT NOT NULL CHECK (ambito IN ('nacional', 'region', 'distrito')),
-            lugar             TEXT NOT NULL,
-            indicador         TEXT NOT NULL,
-            periodo           TEXT NOT NULL,
-            valor             REAL NOT NULL,
-            unidad            TEXT NOT NULL,
-            UNIQUE (fuente_id, ambito, lugar, indicador, periodo)
+    with Session() as s:
+        distrital = s.scalar(
+            select(func.max(DenunciaOficial.periodo)).where(DenunciaOficial.periodo.like("____-__"))
         )
-        """
-    )
+        regional = s.scalar(select(func.max(DenunciaRegional.corte)))
+    return {"distrital": distrital, "regional": regional}
 
+
+# ---------- Indicadores externos ----------
 
 def guardar_indicadores(df: pd.DataFrame, fuente: str, entidad: str, tipo: str,
                         url: str, archivo: str) -> int:
@@ -416,61 +253,37 @@ def guardar_indicadores(df: pd.DataFrame, fuente: str, entidad: str, tipo: str,
     if tipo not in TIPOS_FUENTE_EXTERNA:
         raise ValueError("El tipo de fuente debe ser 'estatal' u 'ong'.")
     inicializar()
-    con = conectar()
-    try:
-        with con:
-            _asegurar_tabla_indicadores(con)
-            existente = con.execute(
-                "SELECT id, tipo FROM fuentes WHERE nombre = ?", (fuente,)
-            ).fetchone()
-            if existente and existente[1] != tipo:
-                raise ValueError(f"Ya existe una fuente llamada '{fuente}' de tipo '{existente[1]}'.")
-            if not existente:
-                con.execute(
-                    "INSERT INTO fuentes (nombre, entidad, tipo) VALUES (?, ?, ?)",
-                    (fuente, entidad, tipo),
-                )
-            fuente_id = con.execute(
-                "SELECT id FROM fuentes WHERE nombre = ?", (fuente,)
-            ).fetchone()[0]
-            sync_id = con.execute(
-                "INSERT INTO sincronizaciones (fuente_id, url, archivo, fecha_descarga, filas_cargadas) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (fuente_id, url, archivo, datetime.now().isoformat(timespec="seconds"), len(df)),
-            ).lastrowid
-            con.executemany(
-                """
-                INSERT INTO indicadores_externos
-                    (fuente_id, sincronizacion_id, ambito, lugar, indicador, periodo, valor, unidad)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (fuente_id, ambito, lugar, indicador, periodo) DO UPDATE SET
-                    valor = excluded.valor,
-                    unidad = excluded.unidad,
-                    sincronizacion_id = excluded.sincronizacion_id
-                """,
-                [
-                    (fuente_id, sync_id, r.ambito, r.lugar, r.indicador, r.periodo,
-                     float(r.valor), r.unidad)
-                    for r in df.itertuples()
-                ],
-            )
-        return len(df)
-    finally:
-        con.close()
+    with Session.begin() as s:
+        existente = s.scalar(select(Fuente).where(Fuente.nombre == fuente))
+        if existente and existente.tipo != tipo:
+            raise ValueError(f"Ya existe una fuente llamada '{fuente}' de tipo '{existente.tipo}'.")
+        if existente is None:
+            existente = Fuente(nombre=fuente, entidad=entidad, tipo=tipo)
+            s.add(existente)
+            s.flush()
+        sync_id = _nueva_sync(s, existente.id, url, archivo, len(df))
+        filas = [
+            {"fuente_id": existente.id, "sincronizacion_id": sync_id, "ambito": r.ambito,
+             "lugar": r.lugar, "indicador": r.indicador, "periodo": r.periodo,
+             "valor": float(r.valor), "unidad": r.unidad}
+            for r in df.itertuples()
+        ]
+        stmt = sqlite_insert(IndicadorExterno)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["fuente_id", "ambito", "lugar", "indicador", "periodo"],
+            set_={"valor": stmt.excluded.valor, "unidad": stmt.excluded.unidad,
+                  "sincronizacion_id": stmt.excluded.sincronizacion_id},
+        )
+        s.execute(stmt, filas)
+    return len(df)
 
 
 def indicadores_df() -> pd.DataFrame:
-    inicializar()
-    con = conectar()
-    try:
-        _asegurar_tabla_indicadores(con)
-        return pd.read_sql_query(
-            "SELECT i.ambito, i.lugar, i.indicador, i.periodo, i.valor, i.unidad, "
-            "       f.nombre AS fuente, f.entidad, f.tipo, s.url, s.fecha_descarga "
-            "FROM indicadores_externos i "
-            "JOIN fuentes f ON f.id = i.fuente_id "
-            "JOIN sincronizaciones s ON s.id = i.sincronizacion_id",
-            con,
-        )
-    finally:
-        con.close()
+    i = IndicadorExterno
+    return consulta_df(
+        select(i.ambito, i.lugar, i.indicador, i.periodo, i.valor, i.unidad,
+               Fuente.nombre.label("fuente"), Fuente.entidad, Fuente.tipo,
+               Sincronizacion.url, Sincronizacion.fecha_descarga)
+        .join(Fuente, Fuente.id == i.fuente_id)
+        .join(Sincronizacion, Sincronizacion.id == i.sincronizacion_id)
+    )
