@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from sqlalchemy import delete, insert, select
+
 from database import db
+from database.modelos import DenunciaOficial, Session, Ubigeo
 
 RUTA_CSV = Path("data/ubigeo/ubigeo_distrito.csv")
 COLUMNAS = {
@@ -71,31 +74,18 @@ def cargar_catalogo() -> int:
         "ubigeo_inei", "ubigeo_reniec", "departamento", "provincia", "distrito",
         "nombre_norm", "superficie_km2", "densidad_2020", "altitud", "latitud", "longitud",
     ]
-    filas = df.astype(object).where(df.notna(), None)[columnas].values.tolist()
+    filas = df.astype(object).where(df.notna(), None)[columnas].to_dict("records")
     db.inicializar()
-    con = db.conectar()
-    try:
-        con.executescript("DROP TABLE IF EXISTS ubigeo;" + ESQUEMA)
-        with con:
-            con.execute("DELETE FROM ubigeo")
-            con.executemany(
-                f"INSERT INTO ubigeo ({', '.join(columnas)}) "
-                f"VALUES ({', '.join('?' * len(columnas))})",
-                filas,
-            )
-        return len(filas)
-    finally:
-        con.close()
+    with Session.begin() as s:
+        s.execute(delete(Ubigeo))
+        s.execute(insert(Ubigeo), filas)
+    return len(filas)
 
 
 def verificar_contra_sidpol() -> None:
     """Compara los distritos del PDF (Lima y Callao) con el catálogo."""
-    con = db.conectar()
-    try:
-        catalogo = pd.read_sql_query("SELECT distrito, provincia, nombre_norm FROM ubigeo", con)
-        oficial = pd.read_sql_query("SELECT DISTINCT distrito FROM denuncias_oficiales", con)
-    finally:
-        con.close()
+    catalogo = db.consulta_df(select(Ubigeo.distrito, Ubigeo.provincia, Ubigeo.nombre_norm))
+    oficial = db.consulta_df(select(DenunciaOficial.distrito).distinct())
 
     zona = catalogo[catalogo["provincia"].map(normalizar).isin({"LIMA", "CALLAO"})]
     del_pdf = {ALIAS.get(normalizar(d), normalizar(d)): d for d in oficial["distrito"]}
