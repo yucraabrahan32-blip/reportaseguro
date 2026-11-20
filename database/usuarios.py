@@ -1,4 +1,3 @@
-"""Administradores del sistema. Las claves se guardan solo como hash con sal (PBKDF2)."""
 import hashlib
 import hmac
 import secrets
