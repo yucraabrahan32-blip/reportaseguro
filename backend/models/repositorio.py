@@ -13,6 +13,7 @@ class RepositorioIncidentes:
         nuevo_id = db.guardar_incidente(
             u.departamento, u.provincia, u.distrito, incidente.delito,
             incidente.fecha_hecho.isoformat(), incidente.hora_hecho, incidente.descripcion,
+            u.latitud, u.longitud,
         )
         incidente.id = nuevo_id
         return nuevo_id

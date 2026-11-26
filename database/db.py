@@ -15,12 +15,22 @@ TIPOS_FUENTE_EXTERNA = ("estatal", "ong")
 _LISTO = False
 
 
+def _migrar_columnas() -> None:
+    """Agrega columnas nuevas a bases creadas con versiones anteriores (SQLite ADD COLUMN)."""
+    with engine.begin() as con:
+        existentes = {fila[1] for fila in con.exec_driver_sql("PRAGMA table_info(incidentes_ciudadanos)")}
+        for columna in ("latitud", "longitud"):
+            if columna not in existentes:
+                con.exec_driver_sql(f"ALTER TABLE incidentes_ciudadanos ADD COLUMN {columna} REAL")
+
+
 def inicializar() -> None:
     """Crea las tablas que falten y registra la fuente SIDPOL (una sola vez por ejecución)."""
     global _LISTO
     if _LISTO:
         return
     Base.metadata.create_all(engine)
+    _migrar_columnas()
     with Session.begin() as s:
         if s.scalar(select(Fuente.id).where(Fuente.nombre == "SIDPOL - Mininter")) is None:
             s.add(Fuente(nombre="SIDPOL - Mininter", entidad="Ministerio del Interior", tipo="estatal"))
@@ -123,13 +133,15 @@ def ubigeo_df() -> pd.DataFrame:
 # ---------- Incidentes ciudadanos ----------
 
 def guardar_incidente(departamento: str, provincia: str, distrito: str, delito: str,
-                      fecha_hecho: str, hora_hecho: str, descripcion: str) -> int:
+                      fecha_hecho: str, hora_hecho: str, descripcion: str,
+                      latitud: float | None = None, longitud: float | None = None) -> int:
     inicializar()
     with Session.begin() as s:
         incidente = IncidenteCiudadano(
             departamento=departamento, provincia=provincia, distrito=distrito, delito=delito,
             fecha_hecho=fecha_hecho, hora_hecho=hora_hecho, descripcion=descripcion.strip(),
             creado_en=datetime.now().isoformat(timespec="seconds"),
+            latitud=latitud, longitud=longitud,
         )
         s.add(incidente)
         s.flush()
@@ -173,13 +185,17 @@ def incidentes_df() -> pd.DataFrame:
 
 
 def incidentes_con_coordenadas() -> pd.DataFrame:
-    """Reportes ciudadanos unidos al catálogo para obtener las coordenadas del distrito."""
+    """Reportes ciudadanos con coordenadas: usa el punto real marcado al reportar y,
+    si no existe, cae en el centroide del distrito del catálogo ubigeo."""
     i, u = IncidenteCiudadano, Ubigeo
+    lat = func.coalesce(i.latitud, u.latitud)
+    lon = func.coalesce(i.longitud, u.longitud)
     return consulta_df(
-        select(i.id, i.departamento, i.provincia, i.distrito, i.delito, u.latitud, u.longitud)
+        select(i.id, i.departamento, i.provincia, i.distrito, i.delito,
+               lat.label("latitud"), lon.label("longitud"))
         .join(u, (u.departamento == i.departamento) & (u.provincia == i.provincia)
-              & (u.distrito == i.distrito))
-        .where(u.latitud.is_not(None), u.longitud.is_not(None))
+              & (u.distrito == i.distrito), isouter=True)
+        .where(lat.is_not(None))
     )
 
 

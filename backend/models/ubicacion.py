@@ -7,6 +7,8 @@ class Ubicacion:
     departamento: str
     provincia: str
     distrito: str
+    latitud: float | None = None
+    longitud: float | None = None
 
     def validar(self) -> None:
         if not (self.departamento and self.provincia and self.distrito):

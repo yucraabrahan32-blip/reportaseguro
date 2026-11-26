@@ -93,6 +93,8 @@ class IncidenteCiudadano(Base):
     hora_hecho: Mapped[str]
     descripcion: Mapped[str]
     creado_en: Mapped[str]
+    latitud: Mapped[float | None]
+    longitud: Mapped[float | None]
 
 
 class Ubigeo(Base):
